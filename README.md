@@ -155,3 +155,58 @@ You must understand every line you submit. We check this with your video and in 
 5. Paste the repository link and the video link in the application form.
 
 We will run `pnpm install && pnpm check && pnpm typecheck && pnpm test` on your repository.
+
+---
+
+## Architecture
+
+- **Web (`web/`):** React + Vite, with TanStack Router serving a single page (`src/routes/index.tsx`). All requests go through one helper in `src/lib/api.ts`. It calls relative `/api/*` URLs, which the Vite dev server proxies to the Worker. It also applies a 10-second `AbortController` timeout and checks every response body at runtime. Errors become messages the user can read.
+- **API (`api/`):** a Hono app running on Cloudflare Workers (`src/index.ts`). Input validation is in `src/validation.ts` and the pure split function is in `src/split.ts`. Every error, including unknown routes and unexpected failures, is returned as `{ "error": "message" }` from `app.onError` and `app.notFound`. SQL errors and stack traces are logged, never returned.
+- **Database:** Cloudflare D1 (SQLite), with the schema in `api/migrations/0001_init.sql`.
+- **Extra endpoint:** `GET /api/homes/:homeId/bills` returns `{ bills: [{ id, homeId, title, totalCents, shares: [{ id, memberId, memberName, amountCents, paidAt }] }] }`. The assignment has no endpoint for reading bills back, and the page needs one to show them. The query is a single join, scoped to the home. Bills are listed newest first, with `rowid` breaking ties. Shares follow member order. A missing home returns 404.
+
+## Decisions
+
+### 1. Integer cents and a deterministic split
+
+All money is a JavaScript safe integer of cents in the API and an `INTEGER` in SQLite. `CHECK (typeof(...) = 'integer')` rejects anything else. The page converts typed dollars to cents by parsing the string (`"0.29"` becomes `29`), not by multiplying a float.
+
+`splitEvenly` computes `remainder = total % n` and `base = (total - remainder) / n`. Both are exact on integers, so there is no rounding step. The first `remainder` members, ordered by their stored `position` (insertion order), each get one extra cent. For example, 1000 split three ways gives 334, 333, 333.
+
+So every share is a whole number of cents, shares differ by at most one cent, and the shares always sum to the bill total. The sum is guaranteed by the algorithm and covered by unit and property tests. No database constraint enforces it.
+
+### 2. Database constraints and atomic bill creation
+
+The schema names every constraint, for example `bills_total_positive_integer`, `shares_bill_member_unique` and `shares_idempotency_key_unique`. A violation therefore names the rule it broke.
+
+Shares carry `home_id` and use composite foreign keys, `(bill_id, home_id)` and `(member_id, home_id)`, which reference `UNIQUE (id, home_id)` keys. The database itself refuses a share that links a bill in one home to a member in another. `shares_paid_state_consistent` makes `paid_at` and `idempotency_key` either both set or both empty.
+
+A bill and all of its shares are inserted in one `DB.batch()`, which D1 runs as a single transaction. If any insert fails, none are kept, so a bill can never exist with missing shares. A test injects a failing statement into the batch and checks that no rows remain.
+
+One limitation: the member list is read just before the batch, so a member added while a bill is being created is not part of that bill.
+
+### 3. Atomic, idempotent payments
+
+Paying a share is one conditional statement:
+
+```sql
+UPDATE shares SET paid_at = ?, idempotency_key = ?
+WHERE id = ? AND bill_id = ? AND paid_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM shares WHERE idempotency_key = ?)
+RETURNING ...
+```
+
+A single statement is atomic and D1 runs statements one at a time. So when requests pay the same share concurrently, exactly one can move it from unpaid to paid. There is no separate check-then-write step for another request to slip between, and the code does not use upserts or `INSERT OR REPLACE`.
+
+If no row changed, the API reads the stored share to decide the response:
+
+| Stored state                      | Response                                 |
+| --------------------------------- | ---------------------------------------- |
+| Paid with this same key           | `200` with the original result (a retry) |
+| Paid with a different key         | `409`                                    |
+| Key already used on another share | `409`                                    |
+| Share or bill does not exist      | `404`                                    |
+
+The `UNIQUE` constraint on the key is a final safeguard. The concurrency tests stall every request after its first database read, so the requests are forced to overlap. A naive read-then-write version fails these tests.
+
+On the page, each share gets one `crypto.randomUUID()` key, stored in `localStorage`. After a timeout, a network error or a 5xx, the outcome is unknown. In that case the share stays unpaid, the button changes to Retry, and the retry sends the same key, even after a page reload. The key is deleted only after a `200`, or when fresh data shows the share as paid. The page never marks a share paid until the server confirms it.
