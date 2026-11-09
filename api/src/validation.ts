@@ -36,3 +36,19 @@ export function requireText(body: JsonObject, field: string): string {
   }
   return trimmed
 }
+
+// Returns a positive whole number of cents, or throws 422. Decimals are rejected, never
+// rounded. Unsafe integers are rejected because JSON parsing may already have lost precision.
+export function requirePositiveCents(body: JsonObject, field: string): number {
+  const value = body[field]
+  if (typeof value !== 'number') {
+    throw new HTTPException(422, { message: `${field} must be a number` })
+  }
+  if (!Number.isSafeInteger(value)) {
+    throw new HTTPException(422, { message: `${field} must be a whole number of cents` })
+  }
+  if (value <= 0) {
+    throw new HTTPException(422, { message: `${field} must be greater than zero` })
+  }
+  return value
+}

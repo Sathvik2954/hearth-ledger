@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
-import { readJsonObject, requireText } from './validation'
+import { splitEvenly } from './split'
+import { readJsonObject, requirePositiveCents, requireText } from './validation'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -41,6 +42,58 @@ app.post('/api/homes/:homeId/members', async (c) => {
     return c.json({ error: 'Home not found' }, 404)
   }
   return c.json({ id, homeId, name }, 201)
+})
+
+app.post('/api/homes/:homeId/bills', async (c) => {
+  const homeId = c.req.param('homeId')
+  const body = await readJsonObject(c.req.raw)
+  const title = requireText(body, 'title')
+  const totalCents = requirePositiveCents(body, 'totalCents')
+
+  // One read answers both questions: no row means no home, a single NULL row means a home
+  // without members. Members come back in insertion order (position), never by name or id.
+  const { results } = await c.env.DB.prepare(
+    `SELECT members.id AS member_id
+     FROM homes LEFT JOIN members ON members.home_id = homes.id
+     WHERE homes.id = ?1
+     ORDER BY members.position`,
+  )
+    .bind(homeId)
+    .all<{ member_id: string | null }>()
+
+  if (results.length === 0) {
+    return c.json({ error: 'Home not found' }, 404)
+  }
+  const memberIds = results.flatMap((row) => (row.member_id === null ? [] : [row.member_id]))
+  if (memberIds.length === 0) {
+    return c.json({ error: 'Home has no members to split the bill between' }, 422)
+  }
+
+  const id = crypto.randomUUID()
+  const shares = splitEvenly(totalCents, memberIds).map(({ member, amountCents }) => ({
+    id: crypto.randomUUID(),
+    memberId: member,
+    amountCents,
+    paidAt: null,
+  }))
+
+  // batch() runs the statements as one transaction: if any insert fails (constraint,
+  // foreign key, I/O), all of them roll back and no bill is left without its shares.
+  // A member added after the read above is simply not part of this bill.
+  const insertShare = c.env.DB.prepare(
+    `INSERT INTO shares (id, bill_id, home_id, member_id, amount_cents)
+     VALUES (?1, ?2, ?3, ?4, ?5)`,
+  )
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      'INSERT INTO bills (id, home_id, title, total_cents) VALUES (?1, ?2, ?3, ?4)',
+    ).bind(id, homeId, title, totalCents),
+    ...shares.map((share) =>
+      insertShare.bind(share.id, id, homeId, share.memberId, share.amountCents),
+    ),
+  ])
+
+  return c.json({ id, homeId, title, totalCents, shares }, 201)
 })
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
