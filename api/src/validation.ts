@@ -1,6 +1,7 @@
 import { HTTPException } from 'hono/http-exception'
 
 export const MAX_NAME_LENGTH = 100
+export const MAX_IDEMPOTENCY_KEY_LENGTH = 255
 
 type JsonObject = Record<string, unknown>
 
@@ -49,6 +50,20 @@ export function requirePositiveCents(body: JsonObject, field: string): number {
   }
   if (value <= 0) {
     throw new HTTPException(422, { message: `${field} must be greater than zero` })
+  }
+  return value
+}
+
+// The key is an opaque client token: returned unchanged (never trimmed or replaced),
+// but a missing, blank or oversized key is a 400.
+export function requireIdempotencyKey(value: string | undefined): string {
+  if (value === undefined || value.trim().length === 0) {
+    throw new HTTPException(400, { message: 'Idempotency-Key header is required' })
+  }
+  if (value.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+    throw new HTTPException(400, {
+      message: `Idempotency-Key must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters`,
+    })
   }
   return value
 }

@@ -1,7 +1,34 @@
 import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { splitEvenly } from './split'
-import { readJsonObject, requirePositiveCents, requireText } from './validation'
+import {
+  readJsonObject,
+  requireIdempotencyKey,
+  requirePositiveCents,
+  requireText,
+} from './validation'
+
+type ShareRow = {
+  id: string
+  member_id: string
+  amount_cents: number
+  paid_at: string | null
+}
+
+function toShare(row: ShareRow) {
+  return {
+    id: row.id,
+    memberId: row.member_id,
+    amountCents: row.amount_cents,
+    paidAt: row.paid_at,
+  }
+}
+
+function isIdempotencyKeyConflict(err: unknown): boolean {
+  return (
+    err instanceof Error && err.message.includes('UNIQUE constraint failed: shares.idempotency_key')
+  )
+}
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -94,6 +121,100 @@ app.post('/api/homes/:homeId/bills', async (c) => {
   ])
 
   return c.json({ id, homeId, title, totalCents, shares }, 201)
+})
+
+app.post('/api/bills/:billId/shares/:shareId/pay', async (c) => {
+  const billId = c.req.param('billId')
+  const shareId = c.req.param('shareId')
+  const key = requireIdempotencyKey(c.req.header('Idempotency-Key'))
+  const db = c.env.DB
+
+  // Compare-and-set in one statement: the share must belong to the bill, still be unpaid,
+  // and the key must not be on any share yet. A single statement is atomic and D1 runs
+  // statements one at a time, so of any number of concurrent requests exactly one can make
+  // the unpaid -> paid transition. No read-then-write gap, no upsert, nothing overwritten.
+  let paid: ShareRow | null = null
+  try {
+    paid = await db
+      .prepare(
+        `UPDATE shares SET paid_at = ?1, idempotency_key = ?2
+         WHERE id = ?3 AND bill_id = ?4 AND paid_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM shares WHERE idempotency_key = ?2)
+         RETURNING id, member_id, amount_cents, paid_at`,
+      )
+      .bind(new Date().toISOString(), key, shareId, billId)
+      .first<ShareRow>()
+  } catch (err) {
+    // shares_idempotency_key_unique is the last line of defence; the NOT EXISTS above
+    // should make it unreachable. If it fires, the persisted state below decides the
+    // answer. Any other database error propagates as a 500.
+    if (!isIdempotencyKeyConflict(err)) throw err
+  }
+  if (paid) {
+    return c.json(toShare(paid), 200)
+  }
+
+  // Nothing changed. Work out why from the persisted state.
+  const share = await db
+    .prepare(
+      `SELECT id, member_id, amount_cents, paid_at, idempotency_key
+       FROM shares WHERE id = ?1 AND bill_id = ?2`,
+    )
+    .bind(shareId, billId)
+    .first<ShareRow & { idempotency_key: string | null }>()
+
+  if (!share) {
+    const bill = await db.prepare('SELECT 1 FROM bills WHERE id = ?1').bind(billId).first()
+    return c.json({ error: bill ? 'Share not found' : 'Bill not found' }, 404)
+  }
+  if (share.idempotency_key === key) {
+    // A retry (or a concurrent duplicate) of the payment that won: replay the stored result.
+    return c.json(toShare(share), 200)
+  }
+  if (share.paid_at !== null) {
+    return c.json({ error: 'Share is already paid with a different Idempotency-Key' }, 409)
+  }
+  const keyInUse = await db
+    .prepare('SELECT 1 FROM shares WHERE idempotency_key = ?1')
+    .bind(key)
+    .first()
+  if (keyInUse) {
+    return c.json({ error: 'Idempotency-Key was already used for another share' }, 409)
+  }
+  // Unpaid share and unused key, yet the update matched nothing: not a client error.
+  throw new Error(`Payment of share ${shareId} matched no row in an unexpected state`)
+})
+
+app.get('/api/homes/:homeId/balances', async (c) => {
+  const homeId = c.req.param('homeId')
+
+  // Aggregated in SQL. LEFT JOINs keep members with nothing unpaid (COALESCE -> 0); the
+  // paid_at IS NULL filter sits in the join condition so it drops shares, not members.
+  // No row means no home; a single NULL row means a home without members.
+  const { results } = await c.env.DB.prepare(
+    `SELECT members.id AS member_id, members.name,
+            COALESCE(SUM(shares.amount_cents), 0) AS outstanding_cents
+     FROM homes
+     LEFT JOIN members ON members.home_id = homes.id
+     LEFT JOIN shares ON shares.member_id = members.id
+                     AND shares.home_id = homes.id
+                     AND shares.paid_at IS NULL
+     WHERE homes.id = ?1
+     GROUP BY members.id
+     ORDER BY members.position`,
+  )
+    .bind(homeId)
+    .all<{ member_id: string | null; name: string | null; outstanding_cents: number }>()
+
+  if (results.length === 0) {
+    return c.json({ error: 'Home not found' }, 404)
+  }
+  const balances = results.flatMap((row) =>
+    row.member_id === null || row.name === null
+      ? []
+      : [{ memberId: row.member_id, name: row.name, outstandingCents: row.outstanding_cents }],
+  )
+  return c.json({ balances }, 200)
 })
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404))
