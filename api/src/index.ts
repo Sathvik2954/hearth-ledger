@@ -123,6 +123,84 @@ app.post('/api/homes/:homeId/bills', async (c) => {
   return c.json({ id, homeId, title, totalCents, shares }, 201)
 })
 
+type BillShareRow = {
+  bill_id: string | null
+  title: string | null
+  total_cents: number | null
+  share_id: string | null
+  member_id: string | null
+  member_name: string | null
+  amount_cents: number | null
+  paid_at: string | null
+}
+
+type BillWithShares = {
+  id: string
+  homeId: string
+  title: string
+  totalCents: number
+  shares: {
+    id: string
+    memberId: string
+    memberName: string
+    amountCents: number
+    paidAt: string | null
+  }[]
+}
+
+app.get('/api/homes/:homeId/bills', async (c) => {
+  const homeId = c.req.param('homeId')
+
+  // One joined read: a row per share, starting from the home so a home without bills
+  // still yields one all-NULL row (no row at all means no home). Newest bill first;
+  // created_at can tie within a millisecond, so rowid (insertion order) breaks ties.
+  // Shares follow member insertion order.
+  const { results } = await c.env.DB.prepare(
+    `SELECT bills.id AS bill_id, bills.title, bills.total_cents,
+            shares.id AS share_id, shares.member_id, members.name AS member_name,
+            shares.amount_cents, shares.paid_at
+     FROM homes
+     LEFT JOIN bills ON bills.home_id = homes.id
+     LEFT JOIN shares ON shares.bill_id = bills.id
+     LEFT JOIN members ON members.id = shares.member_id
+     WHERE homes.id = ?1
+     ORDER BY bills.created_at DESC, bills.rowid DESC, members.position ASC`,
+  )
+    .bind(homeId)
+    .all<BillShareRow>()
+
+  if (results.length === 0) {
+    return c.json({ error: 'Home not found' }, 404)
+  }
+
+  // Map keeps the SQL order of first appearance, so bill order is preserved.
+  const bills = new Map<string, BillWithShares>()
+  for (const row of results) {
+    if (row.bill_id === null || row.title === null || row.total_cents === null) continue
+    let bill = bills.get(row.bill_id)
+    if (!bill) {
+      bill = { id: row.bill_id, homeId, title: row.title, totalCents: row.total_cents, shares: [] }
+      bills.set(row.bill_id, bill)
+    }
+    if (
+      row.share_id !== null &&
+      row.member_id !== null &&
+      row.member_name !== null &&
+      row.amount_cents !== null
+    ) {
+      bill.shares.push({
+        id: row.share_id,
+        memberId: row.member_id,
+        memberName: row.member_name,
+        amountCents: row.amount_cents,
+        paidAt: row.paid_at,
+      })
+    }
+  }
+
+  return c.json({ bills: [...bills.values()] }, 200)
+})
+
 app.post('/api/bills/:billId/shares/:shareId/pay', async (c) => {
   const billId = c.req.param('billId')
   const shareId = c.req.param('shareId')
