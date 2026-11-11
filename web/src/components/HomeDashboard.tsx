@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { payShare, toApiError } from '../lib/api'
-import { formatCents, formatTimestamp } from '../lib/money'
+import { type CurrencyCode, currencyLabel, formatMoney, formatTimestamp } from '../lib/money'
 import { forgetPaymentKeys, paymentKeyFor, type SavedHome } from '../lib/storage'
 import { useHomeData } from '../lib/useHomeData'
 import { BillForm } from './BillForm'
@@ -84,7 +84,9 @@ export function HomeDashboard({ home, onSwitchHome }: Props) {
     }
   }
 
-  const title = home.name ?? 'Your home'
+  // The server's home record is the source of truth; the saved name only fills the header
+  // while it loads.
+  const title = data?.home.name ?? home.name ?? 'Your home'
 
   return (
     <main className="dashboard">
@@ -92,6 +94,7 @@ export function HomeDashboard({ home, onSwitchHome }: Props) {
         <div>
           <p className="eyebrow">Home</p>
           <h1>{title}</h1>
+          {data && <p className="home-currency">{currencyLabel(data.home.currency)}</p>}
           <HomeIdLine id={home.id} />
         </div>
         <button type="button" className="button" onClick={onSwitchHome}>
@@ -141,6 +144,7 @@ export function HomeDashboard({ home, onSwitchHome }: Props) {
             billCount={data.bills.length}
             memberCount={data.balances.length}
             outstandingCents={data.balances.reduce((sum, b) => sum + b.outstandingCents, 0)}
+            currency={data.home.currency}
             refreshing={loading}
           />
           <div className="dashboard__grid">
@@ -148,6 +152,7 @@ export function HomeDashboard({ home, onSwitchHome }: Props) {
               <MembersPanel
                 homeId={home.id}
                 balances={data.balances}
+                currency={data.home.currency}
                 onMemberAdded={(name) => {
                   setMessage({ tone: 'success', text: `${name} joined the home.` })
                   reload()
@@ -157,18 +162,20 @@ export function HomeDashboard({ home, onSwitchHome }: Props) {
             <div className="dashboard__main">
               <BillForm
                 homeId={home.id}
+                currency={data.home.currency}
                 memberCount={data.balances.length}
                 titleRef={billTitleRef}
-                onCreated={(billTitle, cents) => {
+                onCreated={(billTitle, minorUnits) => {
                   setMessage({
                     tone: 'success',
-                    text: `“${billTitle}” (${formatCents(cents)}) was split between members.`,
+                    text: `“${billTitle}” (${formatMoney(minorUnits, data.home.currency)}) was split between members.`,
                   })
                   reload()
                 }}
               />
               <BillList
                 bills={data.bills}
+                currency={data.home.currency}
                 payments={payments}
                 canCreate={data.balances.length > 0}
                 onPay={pay}
@@ -186,18 +193,20 @@ function Summary({
   billCount,
   memberCount,
   outstandingCents,
+  currency,
   refreshing,
 }: {
   billCount: number
   memberCount: number
   outstandingCents: number
+  currency: CurrencyCode
   refreshing: boolean
 }) {
   return (
     <section className="summary" aria-label="Summary" aria-busy={refreshing}>
       <div className="summary__item">
         <span className="summary__label">Outstanding</span>
-        <span className="summary__value">{formatCents(outstandingCents)}</span>
+        <span className="summary__value">{formatMoney(outstandingCents, currency)}</span>
       </div>
       <div className="summary__item">
         <span className="summary__label">Bills</span>

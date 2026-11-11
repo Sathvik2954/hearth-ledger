@@ -164,6 +164,13 @@ code {
   text-transform: uppercase;
 }
 
+.home-currency {
+  margin-top: 4px;
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
 .home-id {
   display: flex;
   flex-wrap: wrap;
@@ -365,6 +372,11 @@ code {
   padding-left: 26px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* Room for a multi-letter prefix such as "AED". */
+.input--amount-wide {
+  padding-left: 52px;
 }
 
 .hint {

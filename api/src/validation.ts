@@ -54,6 +54,28 @@ export function requirePositiveCents(body: JsonObject, field: string): number {
   return value
 }
 
+// Must match the homes_currency_supported CHECK in migrations/0002_home_currency.sql.
+export const SUPPORTED_CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'] as const
+export type Currency = (typeof SUPPORTED_CURRENCIES)[number]
+export const DEFAULT_CURRENCY: Currency = 'INR'
+
+function isCurrency(value: unknown): value is Currency {
+  return SUPPORTED_CURRENCIES.some((code) => code === value)
+}
+
+// Optional: an omitted currency is INR. Anything else must be an exact supported code
+// (case-sensitive, as ISO 4217 codes are), or the request is a 422.
+export function optionalCurrency(body: JsonObject, field: string): Currency {
+  const value = body[field]
+  if (value === undefined) return DEFAULT_CURRENCY
+  if (!isCurrency(value)) {
+    throw new HTTPException(422, {
+      message: `${field} must be one of ${SUPPORTED_CURRENCIES.join(', ')}`,
+    })
+  }
+  return value
+}
+
 // The key is an opaque client token: returned unchanged (never trimmed or replaced),
 // but a missing, blank or oversized key is a 400.
 export function requireIdempotencyKey(value: string | undefined): string {

@@ -1,7 +1,10 @@
 // Shapes of the API responses the page uses. api.ts checks every response against these
-// at runtime, so a malformed body becomes an error instead of a crash.
+// at runtime, so a malformed body becomes an error instead of a crash. Amounts are integer
+// minor units of the home's currency.
 
-export type Home = { id: string; name: string }
+import type { CurrencyCode } from './money'
+
+export type Home = { id: string; name: string; currency: CurrencyCode }
 
 export type Member = { id: string; homeId: string; name: string }
 

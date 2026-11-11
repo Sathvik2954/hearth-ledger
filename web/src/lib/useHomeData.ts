@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { type ApiError, getBalances, getBills, toApiError } from './api'
-import type { Balance, Bill, PaidShare } from './types'
+import { type ApiError, getBalances, getBills, getHome, toApiError } from './api'
+import type { Balance, Bill, Home, PaidShare } from './types'
 
-export type HomeData = { bills: Bill[]; balances: Balance[] }
+// `home` carries the currency every amount on the dashboard is formatted with.
+export type HomeData = { home: Home; bills: Bill[]; balances: Balance[] }
 
 export type HomeDataState = {
   data: HomeData | null
@@ -13,9 +14,9 @@ export type HomeDataState = {
   applyPaidShare: (billId: string, paid: PaidShare) => void
 }
 
-// Loads bills and balances together. Each load aborts the previous one, and a result is
-// only applied if its request was not aborted, so a slow old response can never overwrite
-// newer data. The dashboard is keyed by home id, so switching homes starts fresh.
+// Loads the home, its bills and balances together. Each load aborts the previous one, and a
+// result is only applied if its request was not aborted, so a slow old response can never
+// overwrite newer data. The dashboard is keyed by home id, so switching homes starts fresh.
 export function useHomeData(homeId: string): HomeDataState {
   const [data, setData] = useState<HomeData | null>(null)
   const [error, setError] = useState<ApiError | null>(null)
@@ -26,10 +27,14 @@ export function useHomeData(homeId: string): HomeDataState {
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
-    Promise.all([getBills(homeId, controller.signal), getBalances(homeId, controller.signal)])
-      .then(([bills, balances]) => {
+    Promise.all([
+      getHome(homeId, controller.signal),
+      getBills(homeId, controller.signal),
+      getBalances(homeId, controller.signal),
+    ])
+      .then(([home, bills, balances]) => {
         if (controller.signal.aborted) return
-        setData({ bills, balances })
+        setData({ home, bills, balances })
         setError(null)
       })
       .catch((err: unknown) => {

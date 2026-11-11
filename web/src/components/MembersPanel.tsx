@@ -1,16 +1,17 @@
 import { type FormEvent, useState } from 'react'
 import { addMember, toApiError } from '../lib/api'
-import { formatCents } from '../lib/money'
+import { type CurrencyCode, formatMoney } from '../lib/money'
 import type { Balance } from '../lib/types'
 import { Notice } from './Notice'
 
 type Props = {
   homeId: string
   balances: Balance[]
+  currency: CurrencyCode
   onMemberAdded: (name: string) => void
 }
 
-export function MembersPanel({ homeId, balances, onMemberAdded }: Props) {
+export function MembersPanel({ homeId, balances, currency, onMemberAdded }: Props) {
   return (
     <section className="card" aria-labelledby="members-heading">
       <h2 id="members-heading">Members &amp; balances</h2>
@@ -26,7 +27,7 @@ export function MembersPanel({ homeId, balances, onMemberAdded }: Props) {
               <span className="balance-list__name">{balance.name}</span>
               {balance.outstandingCents > 0 ? (
                 <span className="amount amount--owed">
-                  {formatCents(balance.outstandingCents)}
+                  {formatMoney(balance.outstandingCents, currency)}
                   <span className="visually-hidden"> outstanding</span>
                 </span>
               ) : (

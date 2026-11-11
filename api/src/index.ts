@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { HTTPException } from 'hono/http-exception'
 import { splitEvenly } from './split'
 import {
+  optionalCurrency,
   readJsonObject,
   requireIdempotencyKey,
   requirePositiveCents,
@@ -35,12 +36,30 @@ const app = new Hono<{ Bindings: Env }>()
 app.get('/api/health', (c) => c.json({ status: 'ok' }))
 
 app.post('/api/homes', async (c) => {
-  const name = requireText(await readJsonObject(c.req.raw), 'name')
+  const body = await readJsonObject(c.req.raw)
+  const name = requireText(body, 'name')
+  const currency = optionalCurrency(body, 'currency')
   const id = crypto.randomUUID()
 
-  await c.env.DB.prepare('INSERT INTO homes (id, name) VALUES (?1, ?2)').bind(id, name).run()
+  await c.env.DB.prepare('INSERT INTO homes (id, name, currency) VALUES (?1, ?2, ?3)')
+    .bind(id, name, currency)
+    .run()
 
+  // Exactly the assignment's response shape. The stored currency is read back through
+  // GET /api/homes/:homeId.
   return c.json({ id, name }, 201)
+})
+
+// Lets the page open a home by id and format every amount in the home's own currency.
+app.get('/api/homes/:homeId', async (c) => {
+  const home = await c.env.DB.prepare('SELECT id, name, currency FROM homes WHERE id = ?1')
+    .bind(c.req.param('homeId'))
+    .first<{ id: string; name: string; currency: string }>()
+
+  if (!home) {
+    return c.json({ error: 'Home not found' }, 404)
+  }
+  return c.json(home, 200)
 })
 
 app.post('/api/homes/:homeId/members', async (c) => {

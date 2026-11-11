@@ -1,5 +1,12 @@
 import { type FormEvent, useState } from 'react'
-import { createHome, getBalances, toApiError } from '../lib/api'
+import { createHome, getHome, toApiError } from '../lib/api'
+import {
+  CURRENCIES,
+  type CurrencyCode,
+  currencyLabel,
+  DEFAULT_CURRENCY,
+  isCurrencyCode,
+} from '../lib/money'
 import type { SavedHome } from '../lib/storage'
 import { Notice } from './Notice'
 
@@ -11,8 +18,8 @@ export function WelcomeScreen({ onSelect }: Props) {
       <section className="welcome__intro">
         <h1>Split shared bills fairly</h1>
         <p>
-          Create a home, add the people who live there, and split each bill to the cent. Everyone
-          pays their own share.
+          Create a home, add the people who live there, and split each bill exactly. Everyone pays
+          their own share.
         </p>
       </section>
       <div className="welcome__forms">
@@ -25,6 +32,7 @@ export function WelcomeScreen({ onSelect }: Props) {
 
 function CreateHomeForm({ onCreated }: { onCreated: (home: SavedHome) => void }) {
   const [name, setName] = useState('')
+  const [currency, setCurrency] = useState<CurrencyCode>(DEFAULT_CURRENCY)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -39,7 +47,7 @@ function CreateHomeForm({ onCreated }: { onCreated: (home: SavedHome) => void })
     setPending(true)
     setError(null)
     try {
-      const home = await createHome(trimmed)
+      const home = await createHome(trimmed, currency)
       onCreated({ id: home.id, name: home.name })
     } catch (err) {
       setError(toApiError(err).message)
@@ -61,6 +69,24 @@ function CreateHomeForm({ onCreated }: { onCreated: (home: SavedHome) => void })
           autoComplete="off"
           aria-invalid={error !== null}
         />
+      </label>
+      <label className="field">
+        <span className="field__label">Currency</span>
+        <select
+          className="input"
+          value={currency}
+          onChange={(event) => {
+            const next = event.target.value
+            if (isCurrencyCode(next)) setCurrency(next)
+          }}
+        >
+          {CURRENCIES.map((option) => (
+            <option key={option.code} value={option.code}>
+              {currencyLabel(option.code)}
+            </option>
+          ))}
+        </select>
+        <span className="hint">Every bill and balance in this home uses this currency.</span>
       </label>
       {error && <Notice tone="error">{error}</Notice>}
       <button type="submit" className="button button--primary" disabled={pending}>
@@ -86,9 +112,8 @@ function OpenHomeForm({ onOpened }: { onOpened: (home: SavedHome) => void }) {
     setPending(true)
     setError(null)
     try {
-      // There is no "get home" endpoint; balances answers 404 for an unknown home.
-      await getBalances(id)
-      onOpened({ id, name: null })
+      const home = await getHome(id)
+      onOpened({ id: home.id, name: home.name })
     } catch (err) {
       const apiError = toApiError(err)
       setError(apiError.status === 404 ? 'No home exists with that ID.' : apiError.message)

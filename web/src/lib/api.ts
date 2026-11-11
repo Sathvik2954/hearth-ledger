@@ -1,3 +1,4 @@
+import { type CurrencyCode, isCurrencyCode } from './money'
 import type { Balance, Bill, BillShare, Home, Member, PaidShare } from './types'
 
 export const REQUEST_TIMEOUT_MS = 10_000
@@ -122,7 +123,17 @@ function parseList<T>(value: unknown, item: (v: unknown) => T | null): T[] | nul
   return items
 }
 
+// An unknown currency is a malformed response, never a silent fallback to another symbol.
 function parseHome(v: unknown): Home | null {
+  return isRecord(v) &&
+    typeof v.id === 'string' &&
+    typeof v.name === 'string' &&
+    isCurrencyCode(v.currency)
+    ? { id: v.id, name: v.name, currency: v.currency }
+    : null
+}
+
+function parseCreatedHome(v: unknown): { id: string; name: string } | null {
   return isRecord(v) && typeof v.id === 'string' && typeof v.name === 'string'
     ? { id: v.id, name: v.name }
     : null
@@ -193,8 +204,16 @@ function parseCreatedId(v: unknown): string | null {
 
 // --- endpoints ---------------------------------------------------------------------------
 
-export function createHome(name: string): Promise<Home> {
-  return request('/api/homes', parseHome, { method: 'POST', body: { name } })
+// The response is { id, name } only; the dashboard reads the currency via getHome.
+export function createHome(
+  name: string,
+  currency: CurrencyCode,
+): Promise<{ id: string; name: string }> {
+  return request('/api/homes', parseCreatedHome, { method: 'POST', body: { name, currency } })
+}
+
+export function getHome(homeId: string, signal?: AbortSignal): Promise<Home> {
+  return request(`/api/homes/${encodeURIComponent(homeId)}`, parseHome, { signal })
 }
 
 export function addMember(homeId: string, name: string): Promise<Member> {

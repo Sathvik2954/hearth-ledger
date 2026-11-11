@@ -1,17 +1,18 @@
-import { formatCents, formatTimestamp } from '../lib/money'
+import { type CurrencyCode, formatMoney, formatTimestamp } from '../lib/money'
 import type { Bill, BillShare } from '../lib/types'
 
 export type PaymentState = { pending: boolean; error: string | null }
 
 type Props = {
   bills: Bill[]
+  currency: CurrencyCode
   payments: Record<string, PaymentState>
   canCreate: boolean
   onPay: (billId: string, shareId: string) => void
   onCreateFirst: () => void
 }
 
-export function BillList({ bills, payments, canCreate, onPay, onCreateFirst }: Props) {
+export function BillList({ bills, currency, payments, canCreate, onPay, onCreateFirst }: Props) {
   if (bills.length === 0) {
     return (
       <section className="card empty-state" aria-labelledby="bills-heading">
@@ -34,7 +35,7 @@ export function BillList({ bills, payments, canCreate, onPay, onCreateFirst }: P
       <ul className="bill-list">
         {bills.map((bill) => (
           <li key={bill.id}>
-            <BillCard bill={bill} payments={payments} onPay={onPay} />
+            <BillCard bill={bill} currency={currency} payments={payments} onPay={onPay} />
           </li>
         ))}
       </ul>
@@ -44,10 +45,12 @@ export function BillList({ bills, payments, canCreate, onPay, onCreateFirst }: P
 
 function BillCard({
   bill,
+  currency,
   payments,
   onPay,
 }: {
   bill: Bill
+  currency: CurrencyCode
   payments: Record<string, PaymentState>
   onPay: (billId: string, shareId: string) => void
 }) {
@@ -65,11 +68,11 @@ function BillCard({
           <h3 className="bill__title">{bill.title}</h3>
           <p className="bill__meta">
             {paidCount} of {bill.shares.length} paid
-            {!settled && <> · {formatCents(outstanding)} outstanding</>}
+            {!settled && <> · {formatMoney(outstanding, currency)} outstanding</>}
           </p>
         </div>
         <div className="bill__total">
-          <span className="amount amount--large">{formatCents(bill.totalCents)}</span>
+          <span className="amount amount--large">{formatMoney(bill.totalCents, currency)}</span>
           {settled && <span className="badge badge--paid">Settled</span>}
         </div>
       </header>
@@ -78,6 +81,7 @@ function BillCard({
           <ShareRow
             key={share.id}
             share={share}
+            currency={currency}
             payment={payments[share.id]}
             onPay={() => onPay(bill.id, share.id)}
           />
@@ -89,10 +93,12 @@ function BillCard({
 
 function ShareRow({
   share,
+  currency,
   payment,
   onPay,
 }: {
   share: BillShare
+  currency: CurrencyCode
   payment: PaymentState | undefined
   onPay: () => void
 }) {
@@ -103,7 +109,7 @@ function ShareRow({
   return (
     <li className={`share ${paid ? 'share--paid' : 'share--unpaid'}`}>
       <span className="share__name">{share.memberName}</span>
-      <span className="amount">{formatCents(share.amountCents)}</span>
+      <span className="amount">{formatMoney(share.amountCents, currency)}</span>
       <span className="share__status">
         {share.paidAt !== null ? (
           <span className="badge badge--paid">
@@ -117,7 +123,7 @@ function ShareRow({
               className="button button--small button--primary"
               onClick={onPay}
               disabled={pending}
-              aria-label={`${error ? 'Retry payment' : 'Pay'} ${formatCents(share.amountCents)} for ${share.memberName}`}
+              aria-label={`${error ? 'Retry payment' : 'Pay'} ${formatMoney(share.amountCents, currency)} for ${share.memberName}`}
             >
               {pending ? 'Paying…' : error ? 'Retry' : 'Pay'}
             </button>
